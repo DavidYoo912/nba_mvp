@@ -9,6 +9,5 @@ tqdm
 shap
 plotly
 lightgbm
-basketball-reference-web-scraper
 beautifulsoup4
 nba_api
