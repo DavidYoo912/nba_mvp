@@ -71,9 +71,16 @@ def display_best_model_summary(df_best_model_summary):
     if 'year' in df_display.columns:
         df_display['year'] = df_display['year'].astype(int).astype(str)
 
-    def color_label(val):
-        color = '#22c55e' if val == 'correct' else '#ef4444'
-        return f'color: {color}; font-weight: 600'
+    col_order = ['year', 'Label', 'Predicted MVP', 'Actual MVP', 'MSE', 'R squared']
+    col_order = [c for c in col_order if c in df_display.columns]
+    df_display = df_display[col_order]
+
+    label_colored_cols = [c for c in ['year', 'Label', 'Predicted MVP', 'Actual MVP'] if c in df_display.columns]
+
+    def color_by_label(row):
+        color = '#22c55e' if row.get('Label') == 'correct' else '#ef4444'
+        style = f'color: {color}; font-weight: 600'
+        return [style if col in label_colored_cols else '' for col in row.index]
 
     def color_mse(val):
         c = plt.cm.RdYlGn_r(val / df_display['MSE'].max())
@@ -85,7 +92,7 @@ def display_best_model_summary(df_best_model_summary):
 
     df_styled = (df_display.reset_index(drop=True)
                  .style
-                 .map(color_label, subset=['Label'])   # B7: was .applymap (removed in pandas 2.1+)
+                 .apply(color_by_label, axis=1)
                  .map(color_mse, subset=['MSE'])
                  .map(color_r2, subset=['R squared'])
                  .format({'MSE': '{:.4f}', 'R squared': '{:.3f}'}))
@@ -104,6 +111,7 @@ def display_vote_share_trend(df, player_name, df_summary=None, selected_year=Non
     """A1: Line chart of a player's MVP vote share across every season they appeared."""
     player_history = (df[df['Player'] == player_name][['year', 'Share']]
                       .dropna(subset=['Share'])
+                      .groupby('year', as_index=False)['Share'].max()
                       .sort_values('year'))
     if player_history.empty:
         return
@@ -119,6 +127,7 @@ def display_vote_share_trend(df, player_name, df_summary=None, selected_year=Non
         x=player_history['year'].astype(int),
         y=player_history['Share'].round(3),
         mode='lines+markers',
+        name='Vote Share',
         line=dict(color='#3b82f6', width=2),
         marker=dict(size=7, color='#60a5fa'),
         hovertemplate='%{x}: %{y:.3f}<extra></extra>',
@@ -132,6 +141,7 @@ def display_vote_share_trend(df, player_name, df_summary=None, selected_year=Non
             x=win_rows['year'].astype(int),
             y=win_rows['Share'].round(3),
             mode='markers+text',
+            name='MVP Winner 👑',
             text=['👑'] * len(win_rows),
             textposition='top center',
             textfont=dict(size=16),
@@ -148,15 +158,16 @@ def display_vote_share_trend(df, player_name, df_summary=None, selected_year=Non
                 x=[int(selected_year)],
                 y=[round(float(sel_row.iloc[0]['Share']), 3)],
                 mode='markers',
-                marker=dict(size=14, color='#ffffff', symbol='circle',
-                            line=dict(color='#3b82f6', width=3)),
-                hovertemplate=f'Selected: {selected_year} (%{{y:.3f}})<extra></extra>',
-                showlegend=False,
+                name=f'Selected: {selected_year}',
+                marker=dict(size=18, color='#f97316', symbol='circle',
+                            line=dict(color='#ffffff', width=2)),
+                hovertemplate=f'Selected season: {selected_year} (%{{y:.3f}})<extra></extra>',
+                showlegend=True,
             ))
 
     fig.update_layout(
         title=dict(text=f"{player_name} — MVP Vote Share History", font=dict(size=13)),
-        xaxis=dict(title="Season", tickformat='d', showgrid=False),
+        xaxis=dict(title="Season", tickformat='d', dtick=1, showgrid=False),
         yaxis=dict(title="Vote Share", range=[0, max(1.15, float(player_history['Share'].max()) * 1.25)],
                    showgrid=True, gridcolor='rgba(100,116,139,0.15)'),
         height=260,
@@ -164,6 +175,13 @@ def display_vote_share_trend(df, player_name, df_summary=None, selected_year=Non
         plot_bgcolor='rgba(0,0,0,0)',
         paper_bgcolor='rgba(0,0,0,0)',
         font=dict(size=11),
+        showlegend=True,
+        legend=dict(
+            orientation='h',
+            yanchor='bottom', y=1.02,
+            xanchor='right', x=1,
+            font=dict(size=10),
+        ),
     )
     st.plotly_chart(fig, use_container_width=True)
 

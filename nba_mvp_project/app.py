@@ -132,7 +132,7 @@ Points per game · Team win % · Win Shares per 48 min · Usage rate · PER · O
 st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
 
 # ── Tabs ───────────────────────────────────────────────────────────────────────
-tab_eval, tab_tracker = st.tabs(["📊  Historical Evaluation", "🏀  In-Season Tracker"])
+tab_tracker, tab_eval = st.tabs(["🏀  In-Season Tracker", "📊  Historical Evaluation"])
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -176,6 +176,12 @@ with tab_tracker:
 
     all_candidates, feat_cols = load_candidates(str(players_data_path), str(model_path), csv_mtime)
 
+    if best_model is not None and feat_cols and not all_candidates.empty:
+        X_live = all_candidates[feat_cols].values
+        all_candidates = all_candidates.copy()
+        all_candidates['predictions'] = best_model.predict(X_live).astype(float)
+        all_candidates = all_candidates.sort_values('predictions', ascending=False).reset_index(drop=True)
+
     st.markdown(
         "<p style='color:#94a3b8;font-size:0.9rem;margin-bottom:0.5rem'>"
         "Live MVP race powered by current season stats. The model scores each candidate "
@@ -189,78 +195,7 @@ with tab_tracker:
     with col_slider:
         top_n = st.slider("Number of candidates to show", min_value=3, max_value=10, value=5, step=1)
 
-    display_df = all_candidates.head(top_n)
-
-    # ── Bar chart ──────────────────────────────────────────────────────────────
-    blue_shades = ['#1d4ed8', '#2563eb', '#3b82f6', '#60a5fa', '#93c5fd',
-                   '#bfdbfe', '#dbeafe', '#eff6ff', '#f0f9ff', '#fafafa']
-    bar_colors = blue_shades[:len(display_df)]
-
-    # Fixed row height: each bar row is always 64px tall regardless of top_n
-    row_px = 64
-    chart_height = 90 + top_n * row_px
-    plot_height_px = chart_height - 10 - 50   # minus top & bottom margins
-
-    # Target headshot size: 52px square, expressed in paper units
-    img_px = 52
-    img_sizey = img_px / plot_height_px        # fixed pixel height → paper units
-    img_sizex = 0.09                            # fixed paper-unit width (~constant visual size)
-    img_x   = -0.01                             # right edge of image (just inside left margin)
-    name_x  = img_x - img_sizex - 0.02         # right edge of name, left of image
-
-    fig = go.Figure(go.Bar(
-        x=display_df['predictions'].round(3),
-        y=display_df['Player'],
-        orientation='h',
-        marker=dict(color=bar_colors),
-        text=display_df['predictions'].apply(lambda x: f"{x:.3f}"),
-        textposition='outside',
-        cliponaxis=False,
-    ))
-    fig.update_layout(
-        xaxis=dict(
-            title="Predicted Vote Share (0 = no votes · 1 = unanimous)",
-            range=[0, display_df['predictions'].max() * 1.25],
-            showgrid=True, gridcolor='rgba(100,116,139,0.15)',
-        ),
-        # Hide default y-axis labels — replaced by annotations + images below
-        yaxis=dict(autorange='reversed', showticklabels=False),
-        height=chart_height,
-        margin=dict(l=230, r=100, t=10, b=50),
-        plot_bgcolor='rgba(0,0,0,0)',
-        paper_bgcolor='rgba(0,0,0,0)',
-        font=dict(size=12),
-    )
-
-    for i, (_, row) in enumerate(display_df.iterrows()):
-        paper_y = 1.0 - (2 * i + 1) / (2 * top_n)
-
-        headshot = cached_headshot(row['Player'])
-        if headshot:
-            fig.add_layout_image(
-                source=headshot,
-                xref='paper', yref='paper',
-                x=img_x, y=paper_y,
-                xanchor='right', yanchor='middle',
-                sizex=img_sizex,
-                sizey=img_sizey,
-                layer='above',
-            )
-
-        fig.add_annotation(
-            xref='paper', yref='paper',
-            x=name_x, y=paper_y,
-            text=row['Player'],
-            xanchor='right', yanchor='middle',
-            showarrow=False,
-            font=dict(size=11, color='#e2e8f0'),
-        )
-
-    st.plotly_chart(fig, use_container_width=True)
-    st.caption(
-        "Historical MVP winners typically receive a vote share between 0.30 and 0.95. "
-        "A share near 1.0 indicates a near-unanimous MVP pick."
-    )
+    display_df = all_candidates.head(top_n).copy()
 
     # ── A2: Confidence Indicator ───────────────────────────────────────────────
     if len(display_df) >= 2:
@@ -284,47 +219,262 @@ with tab_tracker:
             unsafe_allow_html=True,
         )
 
-    # ── Prediction trend chart ─────────────────────────────────────────────────
-    history_path = str(ROOT / 'data' / 'prediction_history.csv')
-    if os.path.exists(history_path):
-        history_df = pd.read_csv(history_path)
-        history_df['date'] = pd.to_datetime(history_df['date'])
+    # ── Weekly MVP trend chart (Polymarket-style) ──────────────────────────────
+    TEAM_COLORS = {
+        'ATL': '#E03A3E', 'BOS': '#007A33', 'BKN': '#AAAAAA',
+        'CHA': '#00788C', 'CHI': '#CE1141', 'CLE': '#860038',
+        'DAL': '#00538C', 'DEN': '#FEC524', 'DET': '#C8102E',
+        'GSW': '#1D428A', 'HOU': '#CE1141', 'IND': '#FDBB30',
+        'LAC': '#1D428A', 'LAL': '#552583', 'MEM': '#5D76A9',
+        'MIA': '#98002E', 'MIL': '#00471B', 'MIN': '#78BE20',
+        'NOP': '#85714D', 'NYK': '#F58426', 'OKC': '#007AC1',
+        'ORL': '#0077C0', 'PHI': '#006BB6', 'PHX': '#E56020',
+        'POR': '#E03A3E', 'SAC': '#5A2D81', 'SAS': '#6B7280',
+        'TOR': '#CE1141', 'UTA': '#002B5C', 'WAS': '#E31837',
+    }
 
-        n_dates = history_df['date'].nunique()
-        top_players = display_df['Player'].tolist()
-        trend_df = history_df[history_df['Player'].isin(top_players)]
+    weekly_history_path = ROOT / 'data' / 'weekly_prediction_history.csv'
 
-        if n_dates >= 2:
+    @st.cache_data
+    def load_weekly_history(path, mtime):
+        if not path.exists():
+            return pd.DataFrame()
+        df = pd.read_csv(path)
+        df['week_date'] = pd.to_datetime(df['week_date'])
+        return df
+
+    weekly_mtime = weekly_history_path.stat().st_mtime if weekly_history_path.exists() else 0
+    weekly_history = load_weekly_history(weekly_history_path, weekly_mtime)
+
+    top_players = display_df['Player'].tolist()
+
+    # Compute win_pct from the last weekly snapshot so the table matches the chart endpoint.
+    # Fall back to current predictions if no history exists for these players.
+    total_share = display_df['predictions'].sum()
+    display_df['win_pct'] = (display_df['predictions'] / max(total_share, 1e-6)) * 100
+
+    col_toggle, col_updated = st.columns([5, 2])
+    with col_toggle:
+        view_mode = st.radio(
+            "View as",
+            ["% Win Probability", "Predicted Share"],
+            horizontal=True,
+            label_visibility="collapsed",
+        )
+    with col_updated:
+        if not weekly_history.empty:
+            last_date = weekly_history['week_date'].max().strftime('%b %d, %Y')
+            st.caption(f"Last updated: {last_date}")
+
+    st.markdown(
+        "<span style='font-size:0.8rem;color:#94a3b8'>"
+        "**Predicted Share** = the fraction of total MVP votes the model estimates "
+        "a player would receive (0 = no votes, 1 = unanimous).<br>"
+        "**% Win Probability** rescales this across the shown candidates so they sum to 100%."
+        "</span>",
+        unsafe_allow_html=True,
+    )
+
+    if not weekly_history.empty:
+        trend_df = weekly_history[weekly_history['Player'].isin(top_players)].copy()
+
+        # Upsert live predictions as the most recent data point so the chart's
+        # endpoint always matches the table and detail values.
+        today = pd.Timestamp('today').normalize()
+        live_rows = pd.DataFrame([
+            {'Player': r['Player'], 'week_date': today,
+             'predicted_share': float(r['predictions']),
+             'Team': r.get('Team', '')}
+            for _, r in all_candidates[all_candidates['Player'].isin(top_players)].iterrows()
+        ])
+        trend_df = trend_df[trend_df['week_date'] != today]
+        trend_df = pd.concat([trend_df, live_rows], ignore_index=True)
+
+        n_weeks = trend_df['week_date'].nunique()
+        if n_weeks >= 2:
+            n_players = len(top_players)
+            trend_height = 500 + top_n * 45
+            t_margin, b_margin, r_margin = 20, 50, 300
+            plot_h_px = trend_height - t_margin - b_margin
+
+            img_sizex = 0.110
+            gap_x     = 0.020
+            slot_w    = img_sizex + gap_x
+
+            img_px    = 72   # smaller images → less vertical displacement needed
+
+            use_pct  = (view_mode == "% Win Probability")
+            y_col    = 'win_pct' if use_pct else 'predicted_share'
+            y_fmt    = '.1f' if use_pct else '.3f'
+            y_suffix = '%' if use_pct else ''
+            y_title  = "Win Probability (%)" if use_pct else "Predicted Share"
+
+            week_totals = trend_df.groupby('week_date')['predicted_share'].sum().rename('week_total')
+            trend_df = trend_df.join(week_totals, on='week_date')
+            trend_df['win_pct'] = (trend_df['predicted_share'] / trend_df['week_total'].clip(lower=1e-6)) * 100
+
+            if use_pct:
+                last_date = trend_df['week_date'].max()
+                current_max = trend_df[trend_df['week_date'] == last_date]['win_pct'].max()
+                y_ceiling = current_max * 1.2
+                y_range = [0, y_ceiling]
+                y_denom = y_ceiling
+            else:
+                y_range = [0, 1.05]
+                y_denom = 1.05
+
+            # Image height in DATA units — used for yref='y' layout images/annotations.
+            # This makes headshots snap to the exact y value of their line endpoint.
+            img_sizey_data = (img_px / plot_h_px) * y_denom
+
+            def wrapped_name(player):
+                parts = player.split(' ', 1)
+                return '<br>'.join(parts)
+
+            # Build per-player metadata
+            player_last_y = {}
+            player_team = {}
+            for player in top_players:
+                pdata = trend_df[trend_df['Player'] == player].sort_values('week_date')
+                if not pdata.empty:
+                    player_last_y[player] = float(pdata.iloc[-1][y_col])
+                    player_team[player] = pdata.iloc[0]['Team'] if 'Team' in pdata.columns else ''
+
+            ranked = sorted(
+                [p for p in top_players if p in player_last_y],
+                key=lambda p: player_last_y[p], reverse=True,
+            )
+
+            # Slot height = image + 3 text lines (first name, last name, value) below it.
+            line_h_data = 0.020 * y_denom
+            slot_h = img_sizey_data + 3 * line_h_data + 0.006 * y_denom
+
+            # Cluster players that are extremely close so they share one slot.
+            cluster_threshold = img_sizey_data * 0.35
+            clusters = []
+            for player in ranked:
+                py = player_last_y[player]
+                if clusters and abs(py - player_last_y[clusters[-1][-1]]) < cluster_threshold:
+                    clusters[-1].append(player)
+                else:
+                    clusters.append([player])
+
+            n_clusters = len(clusters)
+            # Bounds for cluster centers: enough margin so image and labels stay in range
+            hi = y_denom - img_sizey_data / 2 - 0.01 * y_denom
+            lo = slot_h - img_sizey_data / 2           # room below image for full label
+
+            natural_ys = [
+                sum(player_last_y[p] for p in c) / len(c)
+                for c in clusters
+            ]
+
+            if n_clusters == 1:
+                adj_ys = [max(lo, min(hi, natural_ys[0]))]
+            else:
+                min_span = (n_clusters - 1) * slot_h
+                nat_span = natural_ys[0] - natural_ys[-1]
+
+                if nat_span >= min_span:
+                    # Natural spread is sufficient — two-pass just to enforce bounds
+                    adj_ys = list(natural_ys)
+                    for i in range(1, n_clusters):
+                        if adj_ys[i - 1] - adj_ys[i] < slot_h:
+                            adj_ys[i] = adj_ys[i - 1] - slot_h
+                        adj_ys[i] = max(lo, adj_ys[i])
+                    for i in range(n_clusters - 2, -1, -1):
+                        if adj_ys[i] - adj_ys[i + 1] < slot_h:
+                            adj_ys[i] = adj_ys[i + 1] + slot_h
+                        adj_ys[i] = min(hi, adj_ys[i])
+                else:
+                    # Center the block around the natural midpoint, expand only as needed
+                    center = (natural_ys[0] + natural_ys[-1]) / 2
+                    top = center + min_span / 2
+                    bot = center - min_span / 2
+                    if top > hi:
+                        bot -= (top - hi)
+                        top = hi
+                    if bot < lo:
+                        top = min(hi, top + (lo - bot))
+                        bot = lo
+                    step = (top - bot) / (n_clusters - 1)
+                    adj_ys = [top - i * step for i in range(n_clusters)]
+
             fig_trend = go.Figure()
-            colors = ['#1d4ed8', '#2563eb', '#3b82f6', '#60a5fa', '#93c5fd',
-                      '#bfdbfe', '#dbeafe', '#eff6ff', '#f0f9ff', '#fafafa']
-            for i, player in enumerate(top_players):
-                pdata = trend_df[trend_df['Player'] == player].sort_values('date')
-                if pdata.empty:
-                    continue
+            team_dash_used = {}
+
+            for player in ranked:
+                pdata = trend_df[trend_df['Player'] == player].sort_values('week_date')
+                team = player_team.get(player, '')
+                color = TEAM_COLORS.get(team, '#3b82f6')
+                dash = 'solid' if team not in team_dash_used else 'dot'
+                team_dash_used[team] = True
+
                 fig_trend.add_trace(go.Scatter(
-                    x=pdata['date'],
-                    y=pdata['predicted_share'].round(3),
+                    x=pdata['week_date'],
+                    y=pdata[y_col].round(3 if not use_pct else 1),
                     mode='lines+markers',
                     name=player,
-                    line=dict(color=colors[i % len(colors)], width=2),
-                    marker=dict(size=6),
-                    hovertemplate=f'{player}<br>%{{x|%b %d}}: %{{y:.3f}}<extra></extra>',
+                    showlegend=False,
+                    line=dict(color=color, width=2.5, dash=dash),
+                    marker=dict(size=5, color=color),
+                    hovertemplate=f'{player}<br>%{{x|%b %d}}: %{{y:{y_fmt}}}{y_suffix}<extra></extra>',
                 ))
+
+            for c_idx, cluster in enumerate(clusters):
+                cluster_y = adj_ys[c_idx]
+                is_solo = len(cluster) == 1
+
+                for col_idx, player in enumerate(cluster):
+                    team = player_team.get(player, '')
+                    color = TEAM_COLORS.get(team, '#3b82f6')
+                    x_pos = 1.02 + col_idx * slot_w
+                    img_cx = x_pos + img_sizex / 2
+
+                    headshot = cached_headshot(player)
+                    if headshot:
+                        fig_trend.add_layout_image(
+                            source=headshot,
+                            xref='paper', yref='y',
+                            x=x_pos, y=cluster_y,
+                            xanchor='left', yanchor='middle',
+                            sizex=img_sizex, sizey=img_sizey_data,
+                            layer='above',
+                        )
+
+                    fsize = 10 if is_solo else 8
+                    name_parts = wrapped_name(player)
+                    last_val = player_last_y.get(player)
+                    val_text = f"{last_val:{y_fmt}}{y_suffix}" if last_val is not None else ""
+                    full_label = f"{name_parts}<br>{val_text}" if val_text else name_parts
+                    # Label below image — even spacing guarantees enough room.
+                    label_y = cluster_y - img_sizey_data / 2 - 0.003 * y_denom
+                    fig_trend.add_annotation(
+                        xref='paper', yref='y',
+                        x=img_cx,
+                        y=label_y,
+                        text=full_label,
+                        xanchor='center', yanchor='top',
+                        showarrow=False,
+                        font=dict(size=fsize, color=color),
+                    )
+
             fig_trend.update_layout(
-                title=dict(text="Predicted Vote Share — Season Trend", font=dict(size=14)),
-                xaxis=dict(title="Date", tickformat="%b %d", showgrid=False),
-                yaxis=dict(title="Predicted Share", range=[0, 1.05],
+                title=dict(text="MVP Race — Weekly Trend",
+                           font=dict(size=14), x=0, xanchor='left'),
+                xaxis=dict(title="Week", tickformat='%b %d', showgrid=False),
+                yaxis=dict(title=y_title, range=y_range,
                            showgrid=True, gridcolor='rgba(100,116,139,0.15)'),
-                height=300,
-                margin=dict(l=10, r=10, t=40, b=30),
-                legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='left', x=0),
+                height=trend_height,
+                margin=dict(l=10, r=r_margin, t=t_margin, b=b_margin),
                 plot_bgcolor='rgba(0,0,0,0)',
                 paper_bgcolor='rgba(0,0,0,0)',
             )
             st.plotly_chart(fig_trend, use_container_width=True)
-        elif n_dates == 1:
-            st.info("Only one data snapshot so far. Run `extract_current.py` again later to see the trend over time.")
+        else:
+            st.info("Run `extract_weekly_history.py` to populate the trend chart.")
+    else:
+        st.info("Run `extract_weekly_history.py` to populate the trend chart.")
 
     # ── Key stats table with row selection ────────────────────────────────────
     st.markdown("##### Key Stats")
@@ -340,19 +490,23 @@ with tab_tracker:
 | **OBPM** | Offensive Box Plus-Minus — offensive contribution per 100 possessions vs. the league average. Positive = above average |
 | **Seed** | Conference playoff seeding (1 = best record in conference, 15 = worst). MVP candidates almost always come from top-seeded teams |
 | **Pred. Share** | The model's predicted fraction of total MVP votes (0–1). This is what the model is optimizing |
+| **Win%** | Predicted Share rescaled so the shown candidates sum to 100% |
 """)
 
     stats_cols = ['Player', 'PTS', 'W/L%', 'win_shares_per_48_minutes',
-                  'value_over_replacement_player', 'offensive_box_plus_minus', 'seed', 'predictions']
+                  'value_over_replacement_player', 'offensive_box_plus_minus', 'seed', 'win_pct', 'predictions']
     available_cols = [c for c in stats_cols if c in display_df.columns]
     stats_display = (display_df[available_cols]
                      .rename(columns={'win_shares_per_48_minutes': 'WS/48',
                                       'value_over_replacement_player': 'VORP',
                                       'offensive_box_plus_minus': 'OBPM',
+                                      'win_pct': 'Win%',
                                       'predictions': 'Pred. Share'})
                      .reset_index(drop=True))
     if 'Pred. Share' in stats_display.columns:
         stats_display['Pred. Share'] = stats_display['Pred. Share'].round(3)
+    if 'Win%' in stats_display.columns:
+        stats_display['Win%'] = stats_display['Win%'].round(1).astype(str) + '%'
 
     event = st.dataframe(stats_display, use_container_width=True,
                          on_select="rerun", selection_mode="single-row",
@@ -377,12 +531,28 @@ with tab_tracker:
                 st.image(headshot_url, width=120)
         with col_header:
             team = player_row.get('Team', '')
-            pred = float(player_row.get('predictions', 0))
+            if best_model is not None and feat_cols:
+                _base_vec = []
+                for _c in feat_cols:
+                    try:
+                        _base_vec.append(float(player_row.get(_c, 0) or 0))
+                    except (TypeError, ValueError):
+                        _base_vec.append(0.0)
+                pred = float(best_model.predict(np.array([_base_vec]))[0])
+            else:
+                pred = float(player_row.get('predictions', 0))
+            player_win_pct_row = display_df[display_df['Player'] == selected_player]
+            player_win_pct = float(player_win_pct_row.iloc[0]['win_pct']) if not player_win_pct_row.empty else None
             seed_val = player_row.get('seed', None)
             try:
                 seed_str = f"#{int(float(seed_val))} seed"
             except (TypeError, ValueError):
                 seed_str = ""
+            win_pct_badge = (
+                f"<span style='background:#0f766e;color:#fff;padding:4px 14px;"
+                f"border-radius:20px;font-size:0.9rem;font-weight:600;margin-right:8px'>"
+                f"Win Probability: {player_win_pct:.1f}%</span>"
+            ) if player_win_pct is not None else ""
             st.markdown(
                 f"<div style='padding-top:10px'>"
                 f"<span style='font-size:1.5rem;font-weight:700'>{selected_player}</span>"
@@ -390,6 +560,7 @@ with tab_tracker:
                 f"{' · ' + seed_str if seed_str else ''}</span>"
                 f"</div>"
                 f"<div style='margin-top:8px'>"
+                f"{win_pct_badge}"
                 f"<span style='background:#1d4ed8;color:#fff;padding:4px 14px;"
                 f"border-radius:20px;font-size:0.9rem;font-weight:600'>"
                 f"Predicted Vote Share: {pred:.3f}</span>"
@@ -457,12 +628,23 @@ with tab_tracker:
                                      for col, label, lo, hi, step in slider_features
                                      if col in feat_cols]
 
+                def _reset_sliders():
+                    for col, *_ in available_sliders:
+                        try:
+                            orig = float(player_row.get(col, 0) or 0)
+                        except (TypeError, ValueError):
+                            orig = 0.0
+                        st.session_state[f"whatif_{col}_{selected_player}"] = orig
+
+                st.button("↺ Reset to original", on_click=_reset_sliders, key=f"reset_{selected_player}")
+
                 modified_vals = {}
                 slider_cols = st.columns(len(available_sliders))
                 for i, (col, label, lo, hi, step) in enumerate(available_sliders):
                     try:
                         current = float(player_row.get(col, 0) or 0)
-                        current = max(lo, min(hi, current))
+                        lo = min(lo, round(current - step, 10))
+                        hi = max(hi, round(current + step, 10))
                     except (TypeError, ValueError):
                         current = (lo + hi) / 2
                     with slider_cols[i]:
@@ -484,8 +666,10 @@ with tab_tracker:
 
                 new_pred = float(best_model.predict(np.array([mod_vec]))[0])
                 delta = new_pred - pred
-                st.metric(
-                    "New Predicted Vote Share",
+                wi_col1, wi_col2 = st.columns(2)
+                wi_col1.metric("Original Predicted Share", f"{pred:.3f}")
+                wi_col2.metric(
+                    "What-If Predicted Share",
                     f"{new_pred:.3f}",
                     delta=f"{delta:+.3f}",
                     delta_color="normal" if delta >= 0 else "inverse",
