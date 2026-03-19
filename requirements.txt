@@ -1,11 +1,14 @@
-# This file may be used to create an environment using:
-# $ conda create --name <env> --file <this file>
-# platform: osx-64
-numpy
-matplotlib
-pandas
-seaborn
-shap
 streamlit
-tqdm
+joblib
+pandas
+matplotlib
+numpy
+scikit-learn
 xgboost
+tqdm
+shap
+plotly
+lightgbm
+basketball-reference-web-scraper
+beautifulsoup4
+nba_api
