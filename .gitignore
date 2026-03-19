@@ -25,8 +25,6 @@ build/
 *.icloud
 .icloud
 
-# Model binaries (large, regenerable via model_training.py)
-model/*.pkl
 
 # Virtual environments
 .venv/
