@@ -21,6 +21,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
+
 # ── Global CSS ─────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
@@ -112,7 +113,48 @@ st.markdown(
     "2025-26 Season · XGBoost model trained on 45 years of NBA history (1980–2025)</p>",
     unsafe_allow_html=True,
 )
-with st.expander("ℹ️ How does this work?"):
+st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+
+# ── Model explainer cards ───────────────────────────────────────────────────────
+_card_style = (
+    "background:#ffffff;"
+    "border:1px solid rgba(0,0,0,0.1);"
+    "border-radius:10px;"
+    "padding:16px 18px;"
+    "height:100%"
+)
+_cards = [
+    ("45 Years of History",
+     "The model was <em>taught</em> by analyzing every MVP race since 1980. "
+     "It ignores the hype and focuses on the statistical patterns that have "
+     "convinced voters for over four decades."),
+    ("The \"Unanimous\" Score",
+     "We use a <strong>Predicted Share</strong> from 0 to 1. A score of 1.0 represents "
+     "a perfect, unanimous MVP (like Steph Curry in 2016) — making it easy to see "
+     "if a leader is barely ahead or running away with the trophy."),
+    ("Winning is a Stat",
+     "Great stats on a losing team rarely win MVPs. The model heavily weights "
+     "<strong>Conference Seed</strong> and <strong>Team Win %</strong>, because "
+     "history shows that &ldquo;Value&rdquo; is almost always tied to winning games."),
+    ("Efficiency Over Volume",
+     "Scoring 30 points per game is impressive, but the model looks for <em>impact</em>. "
+     "It prioritizes players who produce efficiently without stopping the ball and "
+     "rewards those who elevate their teammates' play."),
+]
+card_cols = st.columns(4)
+for col, (title, body) in zip(card_cols, _cards):
+    col.markdown(
+        f"<div style='{_card_style}'>"
+        f"<div style='font-size:0.85rem;font-weight:700;color:#111827;"
+        f"margin-bottom:6px'>{title}</div>"
+        f"<div style='font-size:0.78rem;color:#374151;line-height:1.5'>{body}</div>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+
+with st.expander("Technical Details"):
     st.markdown("""
 This tool uses a machine learning model to predict NBA MVP voting based on player and team statistics.
 
@@ -128,8 +170,6 @@ This tool uses a machine learning model to predict NBA MVP voting based on playe
 **Key stats the model uses:**
 Points per game · Team win % · Win Shares per 48 min · Usage rate · PER · OBPM · VORP · Free throw attempt rate · Conference seed
 """)
-
-st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
 
 # ── Tabs ───────────────────────────────────────────────────────────────────────
 tab_tracker, tab_eval = st.tabs(["🏀  In-Season Tracker", "📊  Historical Evaluation"])
@@ -175,12 +215,6 @@ with tab_tracker:
         csv_mtime = 0
 
     all_candidates, feat_cols = load_candidates(str(players_data_path), str(model_path), csv_mtime)
-
-    if best_model is not None and feat_cols and not all_candidates.empty:
-        X_live = all_candidates[feat_cols].values
-        all_candidates = all_candidates.copy()
-        all_candidates['predictions'] = best_model.predict(X_live).astype(float)
-        all_candidates = all_candidates.sort_values('predictions', ascending=False).reset_index(drop=True)
 
     st.markdown(
         "<p style='color:#94a3b8;font-size:0.9rem;margin-bottom:0.5rem'>"
@@ -257,7 +291,7 @@ with tab_tracker:
     with col_toggle:
         view_mode = st.radio(
             "View as",
-            ["% Win Probability", "Predicted Share"],
+            ["% Win Probability", "Predicted Share", "Rank"],
             horizontal=True,
             label_visibility="collapsed",
         )
@@ -303,17 +337,26 @@ with tab_tracker:
 
             img_px    = 72   # smaller images → less vertical displacement needed
 
+            use_rank = (view_mode == "Rank")
             use_pct  = (view_mode == "% Win Probability")
-            y_col    = 'win_pct' if use_pct else 'predicted_share'
-            y_fmt    = '.1f' if use_pct else '.3f'
-            y_suffix = '%' if use_pct else ''
-            y_title  = "Win Probability (%)" if use_pct else "Predicted Share"
+            y_col    = 'rank' if use_rank else ('win_pct' if use_pct else 'predicted_share')
+            y_fmt    = '.0f' if use_rank else ('.1f' if use_pct else '.3f')
+            y_suffix = '' if use_rank else ('%' if use_pct else '')
+            y_title  = 'Rank' if use_rank else ('Win Probability (%)' if use_pct else 'Predicted Share')
 
             week_totals = trend_df.groupby('week_date')['predicted_share'].sum().rename('week_total')
             trend_df = trend_df.join(week_totals, on='week_date')
             trend_df['win_pct'] = (trend_df['predicted_share'] / trend_df['week_total'].clip(lower=1e-6)) * 100
+            trend_df['rank'] = (
+                trend_df.groupby('week_date')['predicted_share']
+                .rank(ascending=False, method='min')
+                .astype(int)
+            )
 
-            if use_pct:
+            if use_rank:
+                y_range = [top_n + 0.5, 0.5]
+                y_denom = top_n
+            elif use_pct:
                 last_date = trend_df['week_date'].max()
                 current_max = trend_df[trend_df['week_date'] == last_date]['win_pct'].max()
                 y_ceiling = current_max * 1.2
@@ -342,63 +385,68 @@ with tab_tracker:
 
             ranked = sorted(
                 [p for p in top_players if p in player_last_y],
-                key=lambda p: player_last_y[p], reverse=True,
+                key=lambda p: player_last_y[p], reverse=(not use_rank),
             )
 
             # Slot height = image + 3 text lines (first name, last name, value) below it.
             line_h_data = 0.020 * y_denom
             slot_h = img_sizey_data + 3 * line_h_data + 0.006 * y_denom
 
-            # Cluster players that are extremely close so they share one slot.
-            cluster_threshold = img_sizey_data * 0.35
-            clusters = []
-            for player in ranked:
-                py = player_last_y[player]
-                if clusters and abs(py - player_last_y[clusters[-1][-1]]) < cluster_threshold:
-                    clusters[-1].append(player)
-                else:
-                    clusters.append([player])
-
-            n_clusters = len(clusters)
-            # Bounds for cluster centers: enough margin so image and labels stay in range
-            hi = y_denom - img_sizey_data / 2 - 0.01 * y_denom
-            lo = slot_h - img_sizey_data / 2           # room below image for full label
-
-            natural_ys = [
-                sum(player_last_y[p] for p in c) / len(c)
-                for c in clusters
-            ]
-
-            if n_clusters == 1:
-                adj_ys = [max(lo, min(hi, natural_ys[0]))]
+            if use_rank:
+                # Ranks are already evenly spaced integers — no clustering needed.
+                clusters = [[p] for p in ranked]
+                adj_ys = [float(player_last_y[p]) for p in ranked]
             else:
-                min_span = (n_clusters - 1) * slot_h
-                nat_span = natural_ys[0] - natural_ys[-1]
+                # Cluster players that are extremely close so they share one slot.
+                cluster_threshold = img_sizey_data * 0.35
+                clusters = []
+                for player in ranked:
+                    py = player_last_y[player]
+                    if clusters and abs(py - player_last_y[clusters[-1][-1]]) < cluster_threshold:
+                        clusters[-1].append(player)
+                    else:
+                        clusters.append([player])
 
-                if nat_span >= min_span:
-                    # Natural spread is sufficient — two-pass just to enforce bounds
-                    adj_ys = list(natural_ys)
-                    for i in range(1, n_clusters):
-                        if adj_ys[i - 1] - adj_ys[i] < slot_h:
-                            adj_ys[i] = adj_ys[i - 1] - slot_h
-                        adj_ys[i] = max(lo, adj_ys[i])
-                    for i in range(n_clusters - 2, -1, -1):
-                        if adj_ys[i] - adj_ys[i + 1] < slot_h:
-                            adj_ys[i] = adj_ys[i + 1] + slot_h
-                        adj_ys[i] = min(hi, adj_ys[i])
+                n_clusters = len(clusters)
+                # Bounds for cluster centers: enough margin so image and labels stay in range
+                hi = y_denom - img_sizey_data / 2 - 0.01 * y_denom
+                lo = slot_h - img_sizey_data / 2           # room below image for full label
+
+                natural_ys = [
+                    sum(player_last_y[p] for p in c) / len(c)
+                    for c in clusters
+                ]
+
+                if n_clusters == 1:
+                    adj_ys = [max(lo, min(hi, natural_ys[0]))]
                 else:
-                    # Center the block around the natural midpoint, expand only as needed
-                    center = (natural_ys[0] + natural_ys[-1]) / 2
-                    top = center + min_span / 2
-                    bot = center - min_span / 2
-                    if top > hi:
-                        bot -= (top - hi)
-                        top = hi
-                    if bot < lo:
-                        top = min(hi, top + (lo - bot))
-                        bot = lo
-                    step = (top - bot) / (n_clusters - 1)
-                    adj_ys = [top - i * step for i in range(n_clusters)]
+                    min_span = (n_clusters - 1) * slot_h
+                    nat_span = natural_ys[0] - natural_ys[-1]
+
+                    if nat_span >= min_span:
+                        # Natural spread is sufficient — two-pass just to enforce bounds
+                        adj_ys = list(natural_ys)
+                        for i in range(1, n_clusters):
+                            if adj_ys[i - 1] - adj_ys[i] < slot_h:
+                                adj_ys[i] = adj_ys[i - 1] - slot_h
+                            adj_ys[i] = max(lo, adj_ys[i])
+                        for i in range(n_clusters - 2, -1, -1):
+                            if adj_ys[i] - adj_ys[i + 1] < slot_h:
+                                adj_ys[i] = adj_ys[i + 1] + slot_h
+                            adj_ys[i] = min(hi, adj_ys[i])
+                    else:
+                        # Center the block around the natural midpoint, expand only as needed
+                        center = (natural_ys[0] + natural_ys[-1]) / 2
+                        top = center + min_span / 2
+                        bot = center - min_span / 2
+                        if top > hi:
+                            bot -= (top - hi)
+                            top = hi
+                        if bot < lo:
+                            top = min(hi, top + (lo - bot))
+                            bot = lo
+                        step = (top - bot) / (n_clusters - 1)
+                        adj_ys = [top - i * step for i in range(n_clusters)]
 
             fig_trend = go.Figure()
             team_dash_used = {}
@@ -447,8 +495,10 @@ with tab_tracker:
                     last_val = player_last_y.get(player)
                     val_text = f"{last_val:{y_fmt}}{y_suffix}" if last_val is not None else ""
                     full_label = f"{name_parts}<br>{val_text}" if val_text else name_parts
-                    # Label below image — even spacing guarantees enough room.
-                    label_y = cluster_y - img_sizey_data / 2 - 0.003 * y_denom
+                    # Label below image — for rank mode (inverted axis), "below" means larger y.
+                    label_y = (cluster_y + img_sizey_data / 2 + 0.003 * y_denom
+                               if use_rank else
+                               cluster_y - img_sizey_data / 2 - 0.003 * y_denom)
                     fig_trend.add_annotation(
                         xref='paper', yref='y',
                         x=img_cx,
@@ -463,14 +513,23 @@ with tab_tracker:
                 title=dict(text="MVP Race — Weekly Trend",
                            font=dict(size=14), x=0, xanchor='left'),
                 xaxis=dict(title="Week", tickformat='%b %d', showgrid=False),
-                yaxis=dict(title=y_title, range=y_range,
-                           showgrid=True, gridcolor='rgba(100,116,139,0.15)'),
+                yaxis=dict(
+                    title=y_title, range=y_range,
+                    tickvals=list(range(1, top_n + 1)) if use_rank else None,
+                    ticktext=[f"#{i}" for i in range(1, top_n + 1)] if use_rank else None,
+                    showgrid=True, gridcolor='rgba(100,116,139,0.15)',
+                ),
                 height=trend_height,
                 margin=dict(l=10, r=r_margin, t=t_margin, b=b_margin),
                 plot_bgcolor='rgba(0,0,0,0)',
                 paper_bgcolor='rgba(0,0,0,0)',
             )
-            st.plotly_chart(fig_trend, use_container_width=True)
+            chart_event = st.plotly_chart(fig_trend, use_container_width=True,
+                                          on_select="rerun", selection_mode="points")
+            if chart_event and chart_event.selection and chart_event.selection.points:
+                curve_num = chart_event.selection.points[0].get('curve_number', 0)
+                if curve_num < len(ranked):
+                    st.session_state['tracker_selected_player'] = ranked[curve_num]
         else:
             st.info("Run `extract_weekly_history.py` to populate the trend chart.")
     else:
@@ -515,7 +574,14 @@ with tab_tracker:
     # ── Deep dive ──────────────────────────────────────────────────────────────
     selected_rows = event.selection.rows
     if selected_rows:
-        selected_player = display_df.iloc[selected_rows[0]]['Player']
+        st.session_state['tracker_selected_player'] = display_df.iloc[selected_rows[0]]['Player']
+
+    selected_player = st.session_state.get('tracker_selected_player')
+    if selected_player not in display_df['Player'].values:
+        selected_player = None
+        st.session_state.pop('tracker_selected_player', None)
+
+    if selected_player:
         player_row = all_candidates[all_candidates['Player'] == selected_player].iloc[0]
 
         st.markdown("---")
@@ -745,6 +811,6 @@ with tab_tracker:
     else:
         st.markdown(
             "<p style='color:#475569;font-size:0.85rem;margin-top:8px'>"
-            "↑ Click a row in the table to see a full breakdown for that player.</p>",
+            "↑ Click a line in the trend chart or a row in the table to see a full breakdown for that player.</p>",
             unsafe_allow_html=True,
         )
